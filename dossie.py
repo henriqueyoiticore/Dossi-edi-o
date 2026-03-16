@@ -17,6 +17,7 @@ ID_FOLHA = '1PD2pwNYNUt1laQn_L2ikbVJmRk8Y0KKBHtS-kaV-Lqs'
 ID_OCORRENCIAS_1 = '14o86RRH7x5cUylXk6ryEMr14bH12Y94UFDGaz6JOxkM'
 ID_OCORRENCIAS_FORA = '16noLo9yfByjZLh4ZPbROz8p-RWdFZpxtiU2Uhz6ffhw'
 ID_ORDEM_PRIORIDADE = '1IAPh05sT-HlQPUdhJ9WYdgDK2Frjb_YLbzHrznVZz5o'
+ID_AVISOS_NOVO = '1jlZ240LkuecaRmfCLJKHumCbJA1un8-vKjmq2zrPcNs'
 
 # =====================================================================
 # CONFIGURAÇÃO INICIAL DA PÁGINA - FrameControl DNA
@@ -25,7 +26,7 @@ st.set_page_config(
     page_title="FrameControl | Dossiê do Cliente",
     page_icon="📋",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # Injeção de CSS para Identidade Visual "Precision Cut"
@@ -57,7 +58,14 @@ st.markdown("""
 
         /* Sidebar - Fundo Branco e Texto Escuro */
         [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child {
-            display: none !important;
+            background-color: #FFFFFF !important;
+            border-right: 1px solid var(--border-subtle);
+        }
+        
+        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3, 
+        [data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebarNav"] span {
+            color: #1E293B !important;
+            opacity: 1 !important;
         }
 
         /* Restaurar Font dos Ícones */
@@ -251,13 +259,16 @@ def carregar_dados():
     # Aba com todas as demandas e datas (usada para filtrar por mês)
     df_prioridades = get_sheet_data(service, ID_ORDEM_PRIORIDADE, 'Prioridades!A:H')
     
-    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_ranking_editores, df_prioridades
+    # Aba nova para Central de Avisos no Dossiê
+    df_avisos_novo = get_sheet_data(service, ID_AVISOS_NOVO, 'A:Z')
+    
+    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_ranking_editores, df_prioridades, df_avisos_novo
 
 
 # =====================================================================
 # 2. TRATAMENTO DE DADOS (COM ÍNDICE DE PROLIXIDADE)
 # =====================================================================
-def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades):
+def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades, df_avisos):
     try:
         # Helper para encontrar coluna de data por palavras-chave
         def find_date_col(df):
@@ -332,6 +343,11 @@ def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df
             df_prioridades['_Data'] = df_prioridades[col_data_pr].apply(robust_date_parse)
             df_prioridades['_Mes_Ano'] = df_prioridades['_Data'].dt.strftime('%m/%Y').fillna('Desconhecido')
 
+        # Processar nova aba de Avisos
+        if not df_avisos.empty:
+            col_prazo = next((c for c in df_avisos.columns if 'prazo' in c.lower()), find_date_col(df_avisos))
+            df_avisos['_Data_Prazo'] = df_avisos[col_prazo].apply(robust_date_parse)
+
         # Ordenar por data (Mais recentes primeiro)
         if not df_ocorrencias.empty and 'Data' in df_ocorrencias.columns:
             df_ocorrencias = df_ocorrencias.sort_values('Data', ascending=False)
@@ -379,7 +395,7 @@ def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df
     except Exception as e:
         st.warning(f"Aviso no tratamento dos dados: {e}")
         
-    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades
+    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades, df_avisos
 
 # =====================================================================
 # INTERFACE DO DASHBOARD
@@ -397,6 +413,48 @@ def render_header(titulo, subtitulo):
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+def render_central_avisos(df_avisos):
+    render_header("Central de Avisos", "Gestão de Prazos e Entregas")
+    
+    if df_avisos.empty:
+        st.info("Nenhuma demanda encontrada na base de avisos.")
+        return
+        
+    # Identificar coluna de status (status Edição)
+    col_status = next((c for c in df_avisos.columns if 'status' in c.lower() and 'edi' in c.lower()), None)
+    if not col_status:
+        # Fallback
+        col_status = next((c for c in df_avisos.columns if 'status' in c.lower()), None)
+        
+    if not col_status or '_Data_Prazo' not in df_avisos.columns:
+        st.warning("Colunas de 'Status Edição' ou 'Prazo' não identificadas.")
+        st.dataframe(df_avisos, use_container_width=True, hide_index=True)
+        return
+
+    hoje = pd.Timestamp.now().normalize()
+    
+    # "todos que estiverem passado o prazo de entrega e não estiver como finalizado, configura atraso"
+    mask_atrasados = (df_avisos['_Data_Prazo'] < hoje) & (~df_avisos[col_status].astype(str).str.lower().str.contains('finalizado', na=False))
+    v_atrasados = df_avisos[mask_atrasados]
+    
+    fim_semana = hoje + pd.Timedelta(days=(6 - hoje.weekday()))
+    mask_semana = (df_avisos['_Data_Prazo'] >= hoje) & (df_avisos['_Data_Prazo'] <= fim_semana) & (~df_avisos[col_status].astype(str).str.lower().str.contains('finalizado', na=False))
+    v_semana = df_avisos[mask_semana]
+    
+    c_v = [c for c in df_avisos.columns if not c.startswith('_') and c not in ['_SheetRowIdx']]
+    
+    st.markdown('<div style="color:#9F1239; font-weight:700;">🚨 Atrasados</div>', unsafe_allow_html=True)
+    if not v_atrasados.empty: 
+        st.dataframe(v_atrasados[c_v], use_container_width=True, hide_index=True)
+    else: 
+        st.success("Tudo em dia!")
+        
+    st.markdown('<div style="color:#5B21B6; font-weight:700; margin-top:20px;">📅 Entregas desta Semana</div>', unsafe_allow_html=True)
+    if not v_semana.empty: 
+        st.dataframe(v_semana[c_v], use_container_width=True, hide_index=True)
+    else: 
+        st.info("Fila vazia para esta semana.")
 
 def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridades):
     render_header("Dossiê do Cliente", "Histórico Consolidado | Visão 360º")
@@ -512,14 +570,21 @@ def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridade
 
 # Main Application Logic
 with st.spinner("FrameControl Engine Initializing..."):
-    raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_ranking_editores, df_prioridades = carregar_dados()
+    raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_ranking_editores, df_prioridades, raw_avisos = carregar_dados()
     
     if raw_ocorrencias is not None:
-        df_ajustes_p, df_folha_p, df_ocorrencias_p, df_ocorrencias_fora_p, df_prioridades_p = preparar_dados(raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_prioridades)
+        df_ajustes_p, df_folha_p, df_ocorrencias_p, df_ocorrencias_fora_p, df_prioridades_p, df_avisos_p = preparar_dados(raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_prioridades, raw_avisos)
         
         st.session_state['df_prioridades_raw'] = df_prioridades_p
         
-        # Main Application Content (Apenas Dossiê do Cliente)
-        render_dossie(df_ocorrencias_p, df_ocorrencias_fora_p, df_ajustes_p, df_prioridades_p)
+        # Sidebar Navigation
+        st.sidebar.title("FrameControl Docs")
+        page = st.sidebar.radio("Navegação", ["Dossiê do Cliente", "Central de Avisos"])
+        st.sidebar.divider()
+        
+        if page == "Dossiê do Cliente":
+            render_dossie(df_ocorrencias_p, df_ocorrencias_fora_p, df_ajustes_p, df_prioridades_p)
+        elif page == "Central de Avisos":
+            render_central_avisos(df_avisos_p)
     else:
         st.warning("Falha ao carregar dados. Verifique a autenticação.")
