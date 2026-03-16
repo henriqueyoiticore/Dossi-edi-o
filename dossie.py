@@ -147,7 +147,7 @@ def get_google_sheets_service():
 
     return build('sheets', 'v4', credentials=creds)
 
-def get_sheet_data(service, spreadsheet_id, range_name, silent=False):
+def get_sheet_data(service, spreadsheet_id, range_name, silent=False, header_row=0):
     """Puxa os dados de uma aba específica da planilha e converte para Pandas DataFrame."""
     try:
         sheet = service.spreadsheets()
@@ -156,11 +156,15 @@ def get_sheet_data(service, spreadsheet_id, range_name, silent=False):
 
         if not values:
             return pd.DataFrame()
+
+        # Permitir pular linhas no cabeçalho se especificado (útil para planilhas com títulos na linha 1)
+        if header_row > 0 and len(values) > header_row:
+            header = values[header_row]
+            data = values[header_row+1:]
+        else:
+            header = values[0]
+            data = values[1:]
             
-        # Transforma os dados retornados em um DataFrame do Pandas
-        header = values[0]
-        data = values[1:]
-        
         # Garantir colunas únicas (ex: '', '', '' -> 'Unnamed_1', 'Unnamed_2')
         new_header = []
         counts = {}
@@ -259,8 +263,8 @@ def carregar_dados():
     # Aba com todas as demandas e datas (usada para filtrar por mês)
     df_prioridades = get_sheet_data(service, ID_ORDEM_PRIORIDADE, 'Prioridades!A:H')
     
-    # Aba nova para Central de Avisos no Dossiê
-    df_avisos_novo = get_sheet_data(service, ID_AVISOS_NOVO, 'A:Z')
+    # Aba nova para Central de Avisos no Dossiê (Pula a primeira linha pois o cabeçalho real está na linha 2)
+    df_avisos_novo = get_sheet_data(service, ID_AVISOS_NOVO, 'A:Z', header_row=1)
     
     return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_ranking_editores, df_prioridades, df_avisos_novo
 
@@ -432,6 +436,9 @@ def render_central_avisos(df_avisos):
         st.dataframe(df_avisos, use_container_width=True, hide_index=True)
         return
 
+    # Remover anos inválidos (ex: 1900 originários de formatação nas planilhas)
+    df_avisos = df_avisos[df_avisos['_Data_Prazo'].dt.year >= 2000]
+
     hoje = pd.Timestamp.now().normalize()
     
     # "todos que estiverem passado o prazo de entrega e não estiver como finalizado, configura atraso"
@@ -442,7 +449,9 @@ def render_central_avisos(df_avisos):
     mask_semana = (df_avisos['_Data_Prazo'] >= hoje) & (df_avisos['_Data_Prazo'] <= fim_semana) & (~df_avisos[col_status].astype(str).str.lower().str.contains('finalizado', na=False))
     v_semana = df_avisos[mask_semana]
     
-    c_v = [c for c in df_avisos.columns if not c.startswith('_') and c not in ['_SheetRowIdx']]
+    # Exibir todas as colunas da planilha original (exceto as colunas de controle interno adicionadas no código)
+    colunas_internas = ['_Data_Prazo', '_Mes_Ano', '_SheetRowIdx', 'DataSort', 'Data', 'Mes_Ano', 'Texto_Bruto', 'Tipo_Ocorrência']
+    c_v = [c for c in df_avisos.columns if c not in colunas_internas]
     
     st.markdown('<div style="color:#9F1239; font-weight:700;">🚨 Atrasados</div>', unsafe_allow_html=True)
     if not v_atrasados.empty: 
@@ -545,7 +554,8 @@ def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridade
         with tab3:
             st.markdown("### Status Atual na Produção")
             if not res_pr.empty:
-                cols_pr = [c for c in res_pr.columns if not c.startswith('_')]
+                # Filtrar colunas indesejadas a pedido do usuário: 'prazo real' e 'Entregue'
+                cols_pr = [c for c in res_pr.columns if not c.startswith('_') and c.lower() not in ['prazo real', 'entregue']]
                 st.dataframe(res_pr[cols_pr], use_container_width=True, hide_index=True)
                 
                 # Highlight de Atrasos
