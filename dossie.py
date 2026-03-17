@@ -467,6 +467,7 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
     col_bloq_fora = next((c for c in df_ocorrencias_fora.columns if 'bloqueio' in c.lower()), None)
     col_motivo_fora = next((c for c in df_ocorrencias_fora.columns if 'motivo' in c.lower()), None)
     col_res_fora = next((c for c in df_ocorrencias_fora.columns if 'resolução' in c.lower() or 'resolucao' in c.lower()), None)
+    col_desc_fora = next((c for c in df_ocorrencias_fora.columns if 'descrição' in c.lower() or 'incidente' in c.lower() or 'ocorrência' in c.lower() or 'ocorrencia' in c.lower()), None)
 
     bloqueados_info = {}
     resolvidos_info = {}
@@ -478,8 +479,9 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
             nome = str(row_b.get(col_mm_fora, '')).strip().lower()
             if nome:
                 motivo = row_b.get(col_motivo_fora, "Sem motivo listado") if col_motivo_fora else "N/A"
+                desc = row_b.get(col_desc_fora, "Sem ocorrência listada") if col_desc_fora else "N/A"
                 idx_real = row_b.get('_SheetRowIdx')
-                bloqueados_info[nome] = {'motivo': motivo, 'idx': idx_real}
+                bloqueados_info[nome] = {'motivo': motivo, 'desc': desc, 'idx': idx_real}
                 
         # Filtra quem está com RESOLVIDO explicitamente
         mask_r = df_ocorrencias_fora[col_bloq_fora].astype(str).str.strip().str.upper() == 'RESOLVIDO'
@@ -488,9 +490,10 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
             nome = str(row_r.get(col_mm_fora, '')).strip().lower()
             if nome:
                 motivo = row_r.get(col_motivo_fora, "Sem motivo listado") if col_motivo_fora else "N/A"
+                desc = row_r.get(col_desc_fora, "Sem ocorrência listada") if col_desc_fora else "N/A"
                 resolucao = row_r.get(col_res_fora, "Sem resolução informada") if col_res_fora else "N/A"
                 idx_real = row_r.get('_SheetRowIdx')
-                resolvidos_info[nome] = {'motivo': motivo, 'resolucao': resolucao, 'idx': idx_real}
+                resolvidos_info[nome] = {'motivo': motivo, 'desc': desc, 'resolucao': resolucao, 'idx': idx_real}
 
     hoje = pd.Timestamp.now().normalize()
     
@@ -542,19 +545,22 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
             
             # Recuperar os metadados tolerando as mesmas diferenças
             motivo = 'Não informado'
+            desc = 'Não informada'
             idx_planilha = None
             for k, meta in bloqueados_info.items():
                 if nome_key_base in k or k in nome_key_base or nome_key_base.replace('ll', 'lh') in k or nome_key_base.replace('lh', 'll') in k:
                     motivo = meta.get('motivo', 'Não informado')
+                    desc = meta.get('desc', 'Não informada')
                     idx_planilha = meta.get('idx')
                     break
 
             with st.container(border=True):
-                c1, c2, c3 = st.columns([1, 2, 1])
+                c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
                 c1.write(f"**Cliente:** {nome}")
-                c2.write(f"**Motivo:** {motivo}")
+                c2.write(f"**Ocorrência:** {desc}")
+                c3.write(f"**Motivo:** {motivo}")
                 
-                with c3:
+                with c4:
                     if idx_planilha and col_bloq_fora and col_res_fora:
                         with st.popover("✅ Block resolvido", use_container_width=True):
                             st.write("Confirmar resolução e destravar produção?")
@@ -608,18 +614,21 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
             nome_key_base = nome.lower()
             
             motivo = 'Não informado'
+            desc = 'Não informada'
             resolucao = 'Não informada'
             for k, meta in resolvidos_info.items():
                 if nome_key_base in k or k in nome_key_base or nome_key_base.replace('ll', 'lh') in k or nome_key_base.replace('lh', 'll') in k:
                     motivo = meta.get('motivo', 'Não informado')
+                    desc = meta.get('desc', 'Não informada')
                     resolucao = meta.get('resolucao', 'Não informada')
                     break
             
             with st.container(border=True):
-                c1, c2, c3 = st.columns([1, 1, 1])
+                c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
                 c1.write(f"**Cliente:** {nome}")
-                c2.write(f"**Motivo Anterior:** {motivo}")
-                c3.write(f"**Resolução:** {resolucao}")
+                c2.write(f"**Ocorrência:** {desc}")
+                c3.write(f"**Motivo Anterior:** {motivo}")
+                c4.write(f"**Resolução:** {resolucao}")
 
 def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridades):
     render_header("Dossiê do Cliente", "Histórico Consolidado | Visão 360º")
