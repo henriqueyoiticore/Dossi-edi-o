@@ -99,6 +99,25 @@ st.markdown("""
         /* Corrigir inputs (Selectbox) para texto claro (fundo escuro) */
         [data-baseweb="select"] div {
             color: #FFFFFF !important;
+        }
+
+        /* Forçar contraste nos botões que recebem bug de dark mode no cloud */
+        [data-testid="stButton"] button,
+        [data-testid="stPopover"] button,
+        [data-testid="baseButton-secondary"] {
+            background-color: #1E293B !important;
+            border-color: #1E293B !important;
+        }
+        
+        /* Força a cor do texto de absolutamente TUDO dentro do botao */
+        [data-testid="stButton"] button,
+        [data-testid="stButton"] button *,
+        [data-testid="stPopover"] button,
+        [data-testid="stPopover"] button *,
+        [data-testid="baseButton-secondary"],
+        [data-testid="baseButton-secondary"] * {
+            color: #FFFFFF !important;
+        }
 
         #MainMenu, footer {visibility: hidden;}
     </style>
