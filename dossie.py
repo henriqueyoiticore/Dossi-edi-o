@@ -418,7 +418,7 @@ def render_header(titulo, subtitulo):
 </div>
 """, unsafe_allow_html=True)
 
-def render_central_avisos(df_avisos):
+def render_central_avisos(df_avisos, df_ocorrencias_fora):
     render_header("Central de Avisos", "Gestão de Prazos e Entregas")
     
     if df_avisos.empty:
@@ -439,31 +439,168 @@ def render_central_avisos(df_avisos):
     # Remover anos inválidos (ex: 1900 originários de formatação nas planilhas)
     df_avisos = df_avisos[df_avisos['_Data_Prazo'].dt.year >= 2000]
 
+    # PREPARAÇÃO PARA CONFRONTO DE BLOQUEIOS (Ocorrências Fora da Edição)
+    col_mm_avisos = next((c for c in df_avisos.columns if 'mentorado' in c.lower() or 'cliente' in c.lower()), None)
+    if not col_mm_avisos: col_mm_avisos = next((c for c in df_avisos.columns if 'mentor' in c.lower()), None) # Fallback
+
+    col_mm_fora = next((c for c in df_ocorrencias_fora.columns if 'mentorado' in c.lower() or 'cliente' in c.lower()), None)
+    if not col_mm_fora: col_mm_fora = next((c for c in df_ocorrencias_fora.columns if 'mentor' in c.lower()), None) # Fallback
+    col_bloq_fora = next((c for c in df_ocorrencias_fora.columns if 'bloqueio' in c.lower()), None)
+    col_motivo_fora = next((c for c in df_ocorrencias_fora.columns if 'motivo' in c.lower()), None)
+    col_res_fora = next((c for c in df_ocorrencias_fora.columns if 'resolução' in c.lower() or 'resolucao' in c.lower()), None)
+
+    bloqueados_info = {}
+    resolvidos_info = {}
+    if not df_ocorrencias_fora.empty and col_mm_fora and col_bloq_fora:
+        # Filtra quem está com BLOQUEIO explicitamente
+        mask_b = df_ocorrencias_fora[col_bloq_fora].astype(str).str.strip().str.upper() == 'BLOQUEIO'
+        df_bloq = df_ocorrencias_fora[mask_b]
+        for _, row_b in df_bloq.iterrows():
+            nome = str(row_b.get(col_mm_fora, '')).strip().lower()
+            if nome:
+                motivo = row_b.get(col_motivo_fora, "Sem motivo listado") if col_motivo_fora else "N/A"
+                idx_real = row_b.get('_SheetRowIdx')
+                bloqueados_info[nome] = {'motivo': motivo, 'idx': idx_real}
+                
+        # Filtra quem está com RESOLVIDO explicitamente
+        mask_r = df_ocorrencias_fora[col_bloq_fora].astype(str).str.strip().str.upper() == 'RESOLVIDO'
+        df_res = df_ocorrencias_fora[mask_r]
+        for _, row_r in df_res.iterrows():
+            nome = str(row_r.get(col_mm_fora, '')).strip().lower()
+            if nome:
+                motivo = row_r.get(col_motivo_fora, "Sem motivo listado") if col_motivo_fora else "N/A"
+                resolucao = row_r.get(col_res_fora, "Sem resolução informada") if col_res_fora else "N/A"
+                idx_real = row_r.get('_SheetRowIdx')
+                resolvidos_info[nome] = {'motivo': motivo, 'resolucao': resolucao, 'idx': idx_real}
+
     hoje = pd.Timestamp.now().normalize()
     
     # "todos que estiverem passado o prazo de entrega e não estiver como finalizado, configura atraso"
     mask_atrasados = (df_avisos['_Data_Prazo'] < hoje) & (~df_avisos[col_status].astype(str).str.lower().str.contains('finalizado', na=False))
-    v_atrasados = df_avisos[mask_atrasados]
     
     fim_semana = hoje + pd.Timedelta(days=(6 - hoje.weekday()))
     mask_semana = (df_avisos['_Data_Prazo'] >= hoje) & (df_avisos['_Data_Prazo'] <= fim_semana) & (~df_avisos[col_status].astype(str).str.lower().str.contains('finalizado', na=False))
-    v_semana = df_avisos[mask_semana]
+    
+    # Criar uma flag no dataframe de avisos para descobrir quem está bloqueado usando lógica fuzzy string match
+    if col_mm_avisos:
+        def check_status(nome_aviso, target_info):
+            nome_a = str(nome_aviso).strip().lower()
+            if not nome_a or nome_a == 'nan': return False
+            for nome_b in target_info.keys():
+                # Busca simples de contenção
+                if nome_a in nome_b or nome_b in nome_a:
+                    return True
+                # Considerar typos em lh/ll caso comum do Guillermo/Guilhermo
+                if nome_a.replace('ll', 'lh') in nome_b or nome_a.replace('lh', 'll') in nome_b:
+                    return True
+            return False
+            
+        df_avisos['_Nome_Lower'] = df_avisos[col_mm_avisos].astype(str).str.strip().str.lower()
+        df_avisos['_Is_Blocked'] = df_avisos[col_mm_avisos].apply(lambda n: check_status(n, bloqueados_info))
+        df_avisos['_Is_Resolved'] = df_avisos[col_mm_avisos].apply(lambda n: check_status(n, resolvidos_info))
+    else:
+        df_avisos['_Is_Blocked'] = False
+        df_avisos['_Is_Resolved'] = False
+
+    # Separar os bloqueados daqueles que realmente cabem à edição
+    v_bloqueados = df_avisos[(mask_atrasados | mask_semana) & df_avisos['_Is_Blocked']].copy()
+    v_resolvidos = df_avisos[(mask_atrasados | mask_semana) & df_avisos['_Is_Resolved'] & ~df_avisos['_Is_Blocked']].copy()
+    v_atrasados = df_avisos[mask_atrasados & ~df_avisos['_Is_Blocked'] & ~df_avisos['_Is_Resolved']].copy()
+    v_semana = df_avisos[mask_semana & ~df_avisos['_Is_Blocked'] & ~df_avisos['_Is_Resolved']].copy()
     
     # Exibir todas as colunas da planilha original (exceto as colunas de controle interno adicionadas no código)
-    colunas_internas = ['_Data_Prazo', '_Mes_Ano', '_SheetRowIdx', 'DataSort', 'Data', 'Mes_Ano', 'Texto_Bruto', 'Tipo_Ocorrência']
+    colunas_internas = ['_Data_Prazo', '_Mes_Ano', '_SheetRowIdx', 'DataSort', 'Data', 'Mes_Ano', 'Texto_Bruto', 'Tipo_Ocorrência', '_Nome_Lower', '_Is_Blocked', '_Is_Resolved']
     c_v = [c for c in df_avisos.columns if c not in colunas_internas]
     
-    st.markdown('<div style="color:#9F1239; font-weight:700;">🚨 Atrasados</div>', unsafe_allow_html=True)
+    # ================= UI DE BLOQUEADOS ===================
+    if not v_bloqueados.empty:
+        st.markdown('<div style="color:#B45309; font-weight:700; margin-bottom: 10px; font-size: 1.2rem;">🛑 Bloqueados por Fatores Externos</div>', unsafe_allow_html=True)
+        
+        # Como o usuário precisa interagir com os bloqueados, vamos exibir em um formato de lista expansível ou cards
+        for i, (_, block_row) in enumerate(v_bloqueados.iterrows()):
+            nome = str(block_row.get(col_mm_avisos, '')).strip()
+            nome_key_base = nome.lower()
+            
+            # Recuperar os metadados tolerando as mesmas diferenças
+            motivo = 'Não informado'
+            idx_planilha = None
+            for k, meta in bloqueados_info.items():
+                if nome_key_base in k or k in nome_key_base or nome_key_base.replace('ll', 'lh') in k or nome_key_base.replace('lh', 'll') in k:
+                    motivo = meta.get('motivo', 'Não informado')
+                    idx_planilha = meta.get('idx')
+                    break
+
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([1, 2, 1])
+                c1.write(f"**Cliente:** {nome}")
+                c2.write(f"**Motivo:** {motivo}")
+                
+                with c3:
+                    if idx_planilha and col_bloq_fora and col_res_fora:
+                        with st.popover("✅ Block resolvido", use_container_width=True):
+                            st.write("Confirmar resolução e destravar produção?")
+                            # Usamos um iterador garantido 'i' na key para evitar quebra de aplicativo em caso de índices duplicados da planilha
+                            res_texto = st.text_input(f"Como foi resolvido para {nome}?", key=f"res_{idx_planilha}_{i}")
+                            if st.button("Confirmar Resolução", key=f"btn_{idx_planilha}_{i}", type="primary"):
+                                with st.spinner("Atualizando planilha..."):
+                                    # Obter index numérico das colunas na df_ocorrencias_fora (0-indexed para a função update)
+                                    # Ignoramos _SheetRowIdx ao buscar a posição usando columns.get_loc
+                                    try:
+                                        idx_col_bloq = df_ocorrencias_fora.columns.tolist().index(col_bloq_fora)
+                                        idx_col_res = df_ocorrencias_fora.columns.tolist().index(col_res_fora)
+                                        service = get_google_sheets_service()
+                                        
+                                        # ID da Planilha de Ocorrências (de onde vem o bloqueio)
+                                        ID_OCORRENCIAS_FORA = '16noLo9yfByjZLh4ZPbROz8p-RWdFZpxtiU2Uhz6ffhw'
+                                        
+                                        ok1, err1 = update_sheet_cell(service, ID_OCORRENCIAS_FORA, idx_planilha, idx_col_res, res_texto)
+                                        ok2, err2 = update_sheet_cell(service, ID_OCORRENCIAS_FORA, idx_planilha, idx_col_bloq, "RESOLVIDO")
+                                        
+                                        if ok1 and ok2:
+                                            st.success("Bloqueio finalizado!")
+                                            st.cache_data.clear() # Limpa o cash de leitura
+                                            st.rerun() # Recarrega a página instantaneamente
+                                        else:
+                                            st.error(f"Erro ao salvar: {err1} / {err2}")
+                                    except Exception as e:
+                                        st.error(f"Erro na matriz de colunas: {e}")
+                    else:
+                        st.write("⚠️ Colunas API faltando")
+        st.divider()
+
+    # ================= UI RESTANTE ===================
+    st.markdown('<div style="color:#9F1239; font-weight:700;">🚨 Atrasados (Edição)</div>', unsafe_allow_html=True)
     if not v_atrasados.empty: 
         st.dataframe(v_atrasados[c_v], use_container_width=True, hide_index=True)
     else: 
-        st.success("Tudo em dia!")
+        st.success("Tudo em dia para a edição!")
         
     st.markdown('<div style="color:#5B21B6; font-weight:700; margin-top:20px;">📅 Entregas desta Semana</div>', unsafe_allow_html=True)
     if not v_semana.empty: 
         st.dataframe(v_semana[c_v], use_container_width=True, hide_index=True)
     else: 
         st.info("Fila vazia para esta semana.")
+
+    # ================= UI DE RESOLVIDOS ===================
+    if not v_resolvidos.empty:
+        st.markdown('<div style="color:#10B981; font-weight:700; margin-bottom: 10px; font-size: 1.2rem; margin-top:30px;">✅ Blocks Resolvidos (Tracking)</div>', unsafe_allow_html=True)
+        for i, (_, res_row) in enumerate(v_resolvidos.iterrows()):
+            nome = str(res_row.get(col_mm_avisos, '')).strip()
+            nome_key_base = nome.lower()
+            
+            motivo = 'Não informado'
+            resolucao = 'Não informada'
+            for k, meta in resolvidos_info.items():
+                if nome_key_base in k or k in nome_key_base or nome_key_base.replace('ll', 'lh') in k or nome_key_base.replace('lh', 'll') in k:
+                    motivo = meta.get('motivo', 'Não informado')
+                    resolucao = meta.get('resolucao', 'Não informada')
+                    break
+            
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([1, 1, 1])
+                c1.write(f"**Cliente:** {nome}")
+                c2.write(f"**Motivo Anterior:** {motivo}")
+                c3.write(f"**Resolução:** {resolucao}")
 
 def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridades):
     render_header("Dossiê do Cliente", "Histórico Consolidado | Visão 360º")
@@ -592,9 +729,13 @@ with st.spinner("FrameControl Engine Initializing..."):
         page = st.sidebar.radio("Navegação", ["Dossiê do Cliente", "Central de Avisos"])
         st.sidebar.divider()
         
+        if st.sidebar.button("🔄 Atualizar Dados", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+        
         if page == "Dossiê do Cliente":
             render_dossie(df_ocorrencias_p, df_ocorrencias_fora_p, df_ajustes_p, df_prioridades_p)
         elif page == "Central de Avisos":
-            render_central_avisos(df_avisos_p)
+            render_central_avisos(df_avisos_p, df_ocorrencias_fora_p)
     else:
         st.warning("Falha ao carregar dados. Verifique a autenticação.")
