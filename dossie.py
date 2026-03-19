@@ -18,6 +18,7 @@ ID_OCORRENCIAS_1 = '14o86RRH7x5cUylXk6ryEMr14bH12Y94UFDGaz6JOxkM'
 ID_OCORRENCIAS_FORA = '16noLo9yfByjZLh4ZPbROz8p-RWdFZpxtiU2Uhz6ffhw'
 ID_ORDEM_PRIORIDADE = '1IAPh05sT-HlQPUdhJ9WYdgDK2Frjb_YLbzHrznVZz5o'
 ID_AVISOS_NOVO = '1jlZ240LkuecaRmfCLJKHumCbJA1un8-vKjmq2zrPcNs'
+ID_CHURNS = '1sPXv_zDJK0HJ02V8cQo560UBfOSpEUo1SAtsd-sk2Hk'
 
 # =====================================================================
 # CONFIGURAÇÃO INICIAL DA PÁGINA - FrameControl DNA
@@ -206,7 +207,7 @@ def get_sheet_data(service, spreadsheet_id, range_name, silent=False, header_row
                 row.extend([''] * (num_cols - len(row)))
             elif len(row) > num_cols:
                 row = row[:num_cols]
-            row.append(i + 2) # ROW INDEX no Google Sheets (1-indexed + header)
+            row.append(i + header_row + 2) # ROW INDEX no Google Sheets (1-indexed + offset do cabeçalho)
             adjusted_data.append(row)
 
         header.append('_SheetRowIdx')
@@ -217,7 +218,7 @@ def get_sheet_data(service, spreadsheet_id, range_name, silent=False, header_row
             st.error(f"Erro ao ler a planilha ID {spreadsheet_id}: {e}")
         return pd.DataFrame()
 
-def update_sheet_cell(service, spreadsheet_id, row_idx, col_idx, value):
+def update_sheet_cell(service, spreadsheet_id, row_idx, col_idx, value, aba_nome=None):
     """Atualiza uma célula específica na planilha."""
     try:
         # Converter col_idx (0-based) para letra da coluna
@@ -228,7 +229,7 @@ def update_sheet_cell(service, spreadsheet_id, row_idx, col_idx, value):
             col_letter = chr(65 + modulo) + col_letter
             dividend = int((dividend - modulo) / 26)
         
-        range_name = f"{col_letter}{row_idx}"
+        range_name = f"'{aba_nome}'!{col_letter}{row_idx}" if aba_nome else f"{col_letter}{row_idx}"
         body = {'values': [[value]]}
         service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id, range=range_name,
@@ -285,13 +286,26 @@ def carregar_dados():
     # Aba nova para Central de Avisos no Dossiê (Pula a primeira linha pois o cabeçalho real está na linha 2)
     df_avisos_novo = get_sheet_data(service, ID_AVISOS_NOVO, 'A:Z', header_row=1)
     
-    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_ranking_editores, df_prioridades, df_avisos_novo
+    # ——— Processar Churns (Múltiplas Abas de Meses) ———
+    abas_churn = ['CHURN_JANEIRO', 'CHURN_FEVEREIRO', 'CHURN_MARCO', 'CHURN_ABRIL', 'CHURN_MAIO', 'CHURN_JUNHO', 'CHURN_JULHO', 'CHURN_AGOSTO', 'CHURN_SETEMBRO', 'CHURN_OUTUBRO', 'CHURN_NOVEMBRO', 'CHURN_DEZEMBRO']
+    dfs_churn = []
+    for aba_c in abas_churn:
+        try:
+            df_c = get_sheet_data(service, ID_CHURNS, f"'{aba_c}'!A:Z", silent=True, header_row=1)
+            if not df_c.empty:
+                df_c['AbaOrigem'] = aba_c
+                dfs_churn.append(df_c)
+        except: continue
+        
+    df_churns = pd.concat(dfs_churn, ignore_index=True) if dfs_churn else pd.DataFrame()
+    
+    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_ranking_editores, df_prioridades, df_avisos_novo, df_churns
 
 
 # =====================================================================
 # 2. TRATAMENTO DE DADOS (COM ÍNDICE DE PROLIXIDADE)
 # =====================================================================
-def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades, df_avisos):
+def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades, df_avisos, df_churns):
     try:
         # Helper para encontrar coluna de data por palavras-chave
         def find_date_col(df):
@@ -371,6 +385,36 @@ def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df
             col_prazo = next((c for c in df_avisos.columns if 'prazo' in c.lower()), find_date_col(df_avisos))
             df_avisos['_Data_Prazo'] = df_avisos[col_prazo].apply(robust_date_parse)
 
+        # Processar Churns
+        if not df_churns.empty:
+            col_data_ch = next((c for c in df_churns.columns if ('data de churn' in c.lower() or 'data' in c.lower()) and 'tentativa' not in c.lower() and 'recupera' not in c.lower()), None)
+            if col_data_ch:
+                df_churns['DataSort'] = df_churns[col_data_ch].apply(robust_date_parse)
+                df_churns['Mes_Ano'] = df_churns['DataSort'].dt.strftime('%m/%Y').fillna('Desconhecido')
+            else:
+                df_churns['DataSort'] = pd.NaT
+                df_churns['Mes_Ano'] = 'Desconhecido'
+                
+            # Lógica de Fallback: Se a data estiver vazia, infere o mês pelo nome da aba
+            def infere_mes_aba(row):
+                if row['Mes_Ano'] == 'Desconhecido':
+                    aba = str(row.get('AbaOrigem', '')).upper()
+                    if 'JANEIRO' in aba: return '01/2026'
+                    if 'FEVEREIRO' in aba: return '02/2026'
+                    if 'MARCO' in aba or 'MARÇO' in aba: return '03/2026'
+                    if 'ABRIL' in aba: return '04/2026'
+                    if 'MAIO' in aba: return '05/2026'
+                    if 'JUNHO' in aba: return '06/2026'
+                    if 'JULHO' in aba: return '07/2026'
+                    if 'AGOSTO' in aba: return '08/2026'
+                    if 'SETEMBRO' in aba: return '09/2026'
+                    if 'OUTUBRO' in aba: return '10/2026'
+                    if 'NOVEMBRO' in aba: return '11/2025'
+                    if 'DEZ' in aba: return '12/2025'
+                return row['Mes_Ano']
+                
+            df_churns['Mes_Ano'] = df_churns.apply(infere_mes_aba, axis=1)
+
         # Ordenar por data (Mais recentes primeiro)
         if not df_ocorrencias.empty and 'Data' in df_ocorrencias.columns:
             df_ocorrencias = df_ocorrencias.sort_values('Data', ascending=False)
@@ -418,7 +462,7 @@ def preparar_dados(df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df
     except Exception as e:
         st.warning(f"Aviso no tratamento dos dados: {e}")
         
-    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades, df_avisos
+    return df_ajustes, df_folha, df_ocorrencias, df_ocorrencias_fora, df_prioridades, df_avisos, df_churns
 
 # =====================================================================
 # INTERFACE DO DASHBOARD
@@ -742,19 +786,234 @@ def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridade
         # Tela inicial do dossiê
         st.info("Use a busca acima para encontrar o histórico de um cliente específico.")
 
+def render_churns(df_churns, filtro_mes):
+    render_header("Controle de Churns", "Análise de Cancelamentos Não Recuperados")
+    
+    if df_churns.empty:
+        st.info("Nenhum dado de Churn disponível para exibição (Tabelas vazias).")
+        return
+        
+    if not filtro_mes or filtro_mes == "Selecione":
+        st.info("Selecione um mês no menu lateral para visualizar os dados.")
+        return
+        
+    # Filtrar pelo Mês
+    if 'Mes_Ano' in df_churns.columns:
+        df_mes = df_churns[df_churns['Mes_Ano'] == filtro_mes].copy()
+    else:
+        df_mes = pd.DataFrame()
+        
+    try:
+        # Identificar colunas vitais
+        col_status = next((c for c in df_mes.columns if 'status churn' in c.lower()), None)
+        col_resp_rev = next((c for c in df_mes.columns if 'respons' in c.lower() and 'revers' in c.lower()), None)
+        col_obs = next((c for c in df_mes.columns if 'observa' in c.lower()), None)
+        
+        # Identificar colunas auxiliares (Dados do Cartão)
+        col_cliente = next((c for c in df_mes.columns if 'cliente' in c.lower() and 'contato' not in c.lower() and 'e-mail' not in c.lower()), df_mes.columns[0] if not df_mes.empty else "N/A")
+        col_cs = next((c for c in df_mes.columns if 'cs' in c.lower() and 'respons' in c.lower() and 'contato' not in c.lower()), "N/A")
+        col_valor = next((c for c in df_mes.columns if 'valor' in c.lower()), "N/A")
+        col_data = next((c for c in df_mes.columns if 'data' in c.lower() and c != 'Data de Tentativa de Reversão' and c != 'Data de Recuperaçaõ'), "N/A")
+        col_cat = next((c for c in df_mes.columns if 'categoria' in c.lower()), "N/A")
+        
+        if not col_status:
+            st.warning("Coluna 'Status Churn' não encontrada na planilha de Churns.")
+            return
+            
+        # Segmentar os DataFrames por Lógica do Fluxo
+        def classificar_fluxo(row):
+            cliente_val = str(row.get(col_cliente, "")).strip().lower()
+            if not cliente_val or cliente_val in ['nan', 'none', 'nao informado']:
+                return 'OUTRO' # Ignorar lixo e linhas 100% vazias da planilha
+                
+            status = str(row[col_status]).strip().lower() if col_status else ""
+            obs = str(row.get(col_obs, "")).strip() if col_obs else ""
+            
+            # Sanitização para lidar com acentos importados 'Não' / 'Nao' / 'No'
+            import unicodedata
+            status_clean = unicodedata.normalize('NFKD', status).encode('ASCII', 'ignore').decode('utf-8').strip()
+            
+            # Verificações seguras com In em vez de comparador estendido
+            if status_clean == 'recuperado' or ('recuperado' in status_clean and 'n' in status_clean and obs and obs.lower() not in ['nan', 'none']):
+                return 'HISTORICO'
+            elif 'tentativa' in status_clean:
+                return 'EM_TENTATIVA'
+            elif 'recuperado' in status_clean and 'n' in status_clean:
+                return 'ABERTO'
+            return 'OUTRO' # Se não é nenhum, é linha inútil (Retirado o fallback sujo)
+            
+        df_mes['Fluxo'] = df_mes.apply(classificar_fluxo, axis=1)
+        
+        df_abertos = df_mes[df_mes['Fluxo'] == 'ABERTO']
+        df_tentativa = df_mes[df_mes['Fluxo'] == 'EM_TENTATIVA']
+        df_historico = df_mes[df_mes['Fluxo'] == 'HISTORICO']
+        
+    except Exception as e:
+        st.error(f"Erro fatal ao processar os status de Churn: {str(e)}")
+        return
+        
+    # Helper para re-render de Cards
+    def render_card_churn(row, idx_for_key, bg_color="#FFFFFF"):
+        cliente = str(row.get(col_cliente, 'Não informado')).strip() if col_cliente != 'N/A' else 'N/A'
+        cs = str(row.get(col_cs, 'Não informado')).strip() if col_cs != 'N/A' else 'N/A'
+        valor = str(row.get(col_valor, 'Não informado')).strip() if col_valor != 'N/A' else 'N/A'
+        data_c = str(row.get(col_data, 'Não informada')).strip() if col_data != 'N/A' else 'N/A'
+        cat = str(row.get(col_cat, 'Não informada')).strip() if col_cat != 'N/A' else 'N/A'
+        
+        st.markdown(f"""
+        <div style="background-color: {bg_color}; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 15px; margin-bottom: 5px;">
+            <div style="display:flex; justify-content:space-between;">
+                <div style="width: 20%;"><span style='color:#64748B; font-size:11px; font-weight:600; text-transform:uppercase;'>Cliente</span><br><span style='font-size:15px; font-weight:500; color:#1E293B;'>{cliente}</span></div>
+                <div style="width: 20%;"><span style='color:#64748B; font-size:11px; font-weight:600; text-transform:uppercase;'>CS</span><br><span style='font-size:14px; color:#1E293B;'>{cs}</span></div>
+                <div style="width: 20%;"><span style='color:#64748B; font-size:11px; font-weight:600; text-transform:uppercase;'>Valor</span><br><span style='font-size:15px; color:#10B981; font-weight:600;'>{valor}</span></div>
+                <div style="width: 20%;"><span style='color:#64748B; font-size:11px; font-weight:600; text-transform:uppercase;'>Categoria</span><br><span style='font-size:14px; color:#1E293B;'>{cat}</span></div>
+                <div style="width: 20%;"><span style='color:#64748B; font-size:11px; font-weight:600; text-transform:uppercase;'>Data</span><br><span style='font-size:14px; color:#1E293B;'>{data_c}</span></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    service = get_google_sheets_service()
+    ID_CHURNS = '1sPXv_zDJK0HJ02V8cQo560UBfOSpEUo1SAtsd-sk2Hk'
+    idx_col_status = df_mes.columns.tolist().index(col_status) if col_status else -1
+    idx_col_resp = df_mes.columns.tolist().index(col_resp_rev) if col_resp_rev else -1
+    idx_col_obs = df_mes.columns.tolist().index(col_obs) if col_obs else -1
+
+    # -------------------- SESSÃO: CHURNS ABERTOS --------------------
+    if not df_abertos.empty:
+        st.markdown(f"### 🔴 Churns Não Recuperados ({len(df_abertos)})")
+        for i, row in df_abertos.iterrows():
+            aba_origem = row.get('AbaOrigem')
+            linha_planilha = row.get('_SheetRowIdx')
+            
+            with st.container():
+                render_card_churn(row, f"ab_{i}")
+                if idx_col_resp != -1 and idx_col_status != -1 and linha_planilha is not None:
+                    with st.popover("Definir responsável"):
+                        with st.form(key=f"frm_resp_{i}"):
+                            opcoes_resp = ["Apenas CS", "CS + Head", "Daniel", "Arthur"]
+                            resp_novo = st.selectbox("Qual o nome do responsável por rever esse Churn?", options=opcoes_resp, key=f"resp_{i}")
+                            submit_resp = st.form_submit_button("Salvar e Iniciar Reversão", type="primary")
+                            
+                            if submit_resp:
+                                with st.spinner("Registrando..."):
+                                    try:
+                                        # Pula a camada do Streamlit e olha os IDs do sheets nu e cru pra cravar as colunas!
+                                        resp = service.spreadsheets().values().get(spreadsheetId=ID_CHURNS, range=f"'{aba_origem}'!A2:Z2").execute()
+                                        headers_reais = resp.get('values', [[]])[0]
+                                        real_c_resp = next((i for i, c in enumerate(headers_reais) if 'respons' in str(c).lower() and 'revers' in str(c).lower()), idx_col_resp)
+                                        real_c_status = next((i for i, c in enumerate(headers_reais) if 'status churn' in str(c).lower()), idx_col_status)
+                                    except:
+                                        real_c_resp = idx_col_resp
+                                        real_c_status = idx_col_status
+                                        
+                                    ok1, _ = update_sheet_cell(service, ID_CHURNS, int(linha_planilha), real_c_resp, resp_novo, aba_origem)
+                                    ok2, _ = update_sheet_cell(service, ID_CHURNS, int(linha_planilha), real_c_status, "Em tentativa de reversão", aba_origem)
+                                    if ok1 and ok2:
+                                        st.success("Reversão Iniciada!")
+                                        st.cache_data.clear()
+                                        st.rerun()
+                                    else:
+                                        st.error("Falha ao se conectar com a Planilha Google.")
+        st.divider()
+
+    # -------------------- SESSÃO: EM TENTATIVA --------------------
+    if not df_tentativa.empty:
+        st.markdown(f"### 🟡 Em Tentativa de Reversão ({len(df_tentativa)})")
+        for i, row in df_tentativa.iterrows():
+            aba_origem = row.get('AbaOrigem')
+            linha_planilha = row.get('_SheetRowIdx')
+            
+            with st.container():
+                # Amarelo clarinho pro background ("#FEF9C3")
+                render_card_churn(row, f"ten_{i}", bg_color="#FEF9C3")
+                
+                if idx_col_obs != -1 and idx_col_status != -1 and linha_planilha is not None:
+                    cx1, cx2 = st.columns(2)
+                    with cx1:
+                        with st.popover("🟢 RECUPERADO", use_container_width=True):
+                            with st.form(key=f"frm_rec_{i}"):
+                                obs_r = st.text_area("Observação / Motivo da Reversão", key=f"obs_r_{i}")
+                                submit_r = st.form_submit_button("Confirmar Reversão")
+                                if submit_r:
+                                    with st.spinner("Atualizando base..."):
+                                        try:
+                                            resp = service.spreadsheets().values().get(spreadsheetId=ID_CHURNS, range=f"'{aba_origem}'!A2:Z2").execute()
+                                            headers_reais = resp.get('values', [[]])[0]
+                                            real_c_obs = next((i for i, c in enumerate(headers_reais) if 'observa' in str(c).lower()), idx_col_obs)
+                                            real_c_status = next((i for i, c in enumerate(headers_reais) if 'status churn' in str(c).lower()), idx_col_status)
+                                        except:
+                                            real_c_obs = idx_col_obs
+                                            real_c_status = idx_col_status
+                                            
+                                        update_sheet_cell(service, ID_CHURNS, int(linha_planilha), real_c_obs, obs_r, aba_origem)
+                                        update_sheet_cell(service, ID_CHURNS, int(linha_planilha), real_c_status, "Recuperado", aba_origem)
+                                        st.cache_data.clear()
+                                        st.rerun()
+                    with cx2:
+                        with st.popover("❌ NÃO RECUPERADO", use_container_width=True):
+                            with st.form(key=f"frm_nrec_{i}"):
+                                obs_nr = st.text_area("Motivo do fracasso na Reversão", key=f"obs_nr_{i}")
+                                submit_nr = st.form_submit_button("Confirmar Fim da Tentativa")
+                                if submit_nr:
+                                    with st.spinner("Registrando fim..."):
+                                        try:
+                                            resp = service.spreadsheets().values().get(spreadsheetId=ID_CHURNS, range=f"'{aba_origem}'!A2:Z2").execute()
+                                            headers_reais = resp.get('values', [[]])[0]
+                                            real_c_obs = next((i for i, c in enumerate(headers_reais) if 'observa' in str(c).lower()), idx_col_obs)
+                                            real_c_status = next((i for i, c in enumerate(headers_reais) if 'status churn' in str(c).lower()), idx_col_status)
+                                        except:
+                                            real_c_obs = idx_col_obs
+                                            real_c_status = idx_col_status
+                                            
+                                        update_sheet_cell(service, ID_CHURNS, int(linha_planilha), real_c_obs, obs_nr, aba_origem)
+                                        update_sheet_cell(service, ID_CHURNS, int(linha_planilha), real_c_status, "Não recuperado", aba_origem)
+                                        st.cache_data.clear()
+                                        st.rerun()
+        st.divider()
+
+    # -------------------- SESSÃO: HISTÓRICO --------------------
+    if not df_historico.empty:
+        st.markdown(f"### 🏁 Histórico de Churns - Mês {filtro_mes} ({len(df_historico)})")
+        for i, row in df_historico.iterrows():
+            status_atual = str(row.get(col_status, '')).upper()
+            obs_atual = str(row.get(col_obs, '')).strip() if col_obs else ""
+            
+            with st.container(border=True):
+                # Fundo de cor leve dependendo do success/failure do histórico 
+                cor_bg = "#DCFCE7" if "RECUPERADO" in status_atual and "NÃO" not in status_atual and "NAO" not in status_atual else "#F1F5F9"
+                render_card_churn(row, f"hist_{i}", bg_color=cor_bg)
+                st.markdown(f"<div style='padding: 5px 15px; font-size:14px;'><span style='font-weight:600;'>Status Final:</span> {status_atual} | <span style='font-weight:600;'>Obs:</span> {obs_atual}</div>", unsafe_allow_html=True)
+                
+    if df_abertos.empty and df_tentativa.empty and df_historico.empty:
+        st.success(f"Nenhum Churn encontrado para o mês de {filtro_mes} 🎉")
 
 # Main Application Logic
 with st.spinner("FrameControl Engine Initializing..."):
-    raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_ranking_editores, df_prioridades, raw_avisos = carregar_dados()
+    raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_ranking_editores, df_prioridades, raw_avisos, raw_churns = carregar_dados()
     
     if raw_ocorrencias is not None:
-        df_ajustes_p, df_folha_p, df_ocorrencias_p, df_ocorrencias_fora_p, df_prioridades_p, df_avisos_p = preparar_dados(raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_prioridades, raw_avisos)
+        df_ajustes_p, df_folha_p, df_ocorrencias_p, df_ocorrencias_fora_p, df_prioridades_p, df_avisos_p, df_churns_p = preparar_dados(raw_ajustes, raw_folha, raw_ocorrencias, raw_ocorrencias_fora, df_prioridades, raw_avisos, raw_churns)
         
         st.session_state['df_prioridades_raw'] = df_prioridades_p
         
         # Sidebar Navigation
         st.sidebar.title("FrameControl Docs")
-        page = st.sidebar.radio("Navegação", ["Dossiê do Cliente", "Central de Avisos"])
+        page = st.sidebar.radio("Navegação", ["Dossiê do Cliente", "Central de Avisos", "Controle de Churns"])
+        
+        filtro_mes_churn = None
+        if page == "Controle de Churns":
+            if not df_churns_p.empty and 'Mes_Ano' in df_churns_p.columns:
+                meses_c = [m for m in df_churns_p['Mes_Ano'].dropna().unique() if str(m) != 'Desconhecido']
+                meses_c = sorted(meses_c, reverse=True)
+            else:
+                meses_c = []
+                
+            st.sidebar.markdown("### Filtros de Churn")
+            if meses_c:
+                filtro_mes_churn = st.sidebar.selectbox("📅 Selecione o Mês do Churn", meses_c)
+            else:
+                st.sidebar.info("Aguardando carregar dados de meses")
+                
         st.sidebar.divider()
         
         if st.sidebar.button("🔄 Atualizar Dados", use_container_width=True):
@@ -765,5 +1024,7 @@ with st.spinner("FrameControl Engine Initializing..."):
             render_dossie(df_ocorrencias_p, df_ocorrencias_fora_p, df_ajustes_p, df_prioridades_p)
         elif page == "Central de Avisos":
             render_central_avisos(df_avisos_p, df_ocorrencias_fora_p)
+        elif page == "Controle de Churns":
+            render_churns(df_churns_p, filtro_mes_churn)
     else:
         st.warning("Falha ao carregar dados. Verifique a autenticação.")
