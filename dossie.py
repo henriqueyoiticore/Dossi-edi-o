@@ -109,25 +109,25 @@ st.markdown("""
             opacity: 1 !important;
         }
 
-        /* Botões secundários com contraste dark (fundo claro, texto escuro) */
+        /* Botões secundários: Fundo escuro e Texto claro para garantir contraste */
         [data-testid="baseButton-secondary"],
         [data-testid="stPopover"] button {
-            background-color: #FFFFFF !important;
-            border-color: #CBD5E1 !important;
-            color: #1E293B !important;
+            background-color: #1E293B !important;
+            border-color: #1E293B !important;
+            color: #FFFFFF !important;
             font-weight: 600 !important;
         }
         
         [data-testid="baseButton-secondary"]:hover,
         [data-testid="stPopover"] button:hover {
-            border-color: #94A3B8 !important;
-            background-color: #F8FAFC !important;
+            border-color: #334155 !important;
+            background-color: #334155 !important;
         }
         
-        /* Força a cor do texto dentro do botao secundário */
+        /* Força a cor do texto clara dentro do botao secundário */
         [data-testid="baseButton-secondary"] *,
         [data-testid="stPopover"] button * {
-            color: #1E293B !important;
+            color: #FFFFFF !important;
         }
 
         #MainMenu, footer {visibility: hidden;}
@@ -715,22 +715,6 @@ def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridade
         nome_busca = st.text_input("👤 Nome do Cliente", value=st.session_state['search_dossie_val'], placeholder="Digite o nome do cliente aqui para buscar no histórico...", help="Busca em todas as bases de dados")
         btn_gerar = st.button("Gerar Dossiê Completo", use_container_width=True, type="primary")
 
-        # Sugestões Inteligentes (Pegar últimos clientes da planilha de ocorrências ou tickets)
-        if not df_ocorrencias.empty:
-            col_n_oc = next((c for c in df_ocorrencias.columns if 'mentorado' in c.lower() or 'cliente' in c.lower()), None)
-            if col_n_oc:
-                recentes = df_ocorrencias[col_n_oc].dropna().unique()
-                sugestoes_todas = [str(x).strip() for x in recentes if str(x).strip() and str(x).strip().lower() not in ['nan', 'none']]
-                sugestoes = list(sugestoes_todas)[:3]
-                if sugestoes:
-                    st.markdown("<p style='text-align: center; color: #64748B; font-size: 0.85rem; margin-top: 10px; margin-bottom: 5px;'>Sugestões Rápidas:</p>", unsafe_allow_html=True)
-                    cols_sug = st.columns(len(sugestoes))
-                    for i, sug in enumerate(sugestoes):
-                        with cols_sug[i]:
-                            if st.button(f"{sug}", key=f"btn_sug_{i}", use_container_width=True):
-                                st.session_state['search_dossie_val'] = sug
-                                st.rerun()
-
     if nome_busca or btn_gerar:
         # Normalizar nomes para busca
         termo = str(nome_busca).strip().lower()
@@ -1042,7 +1026,7 @@ with st.spinner("FrameControl Engine Initializing..."):
         
         # Sidebar Navigation
         st.sidebar.title("FrameControl Docs")
-        page = st.sidebar.radio("Navegação", ["Dossiê do Cliente", "Central de Avisos", "Controle de Churns"])
+        page = st.sidebar.radio("Navegação", ["Central de Avisos", "Dossiê do Cliente", "Controle de Churns"])
         
         filtro_mes_churn = None
         if page == "Controle de Churns":
