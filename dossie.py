@@ -738,11 +738,31 @@ def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridade
         col_n_of = next((c for c in df_ocorrencias_fora.columns if 'cliente' in c.lower()), None)
         col_n_pr = next((c for c in df_prioridades.columns if 'nome' in c.lower()), None)
 
-        # 2. Filtrar Dados
-        res_aj = df_ajustes[df_ajustes[col_n_aj].astype(str).str.lower().str.contains(termo, na=False)] if col_n_aj else pd.DataFrame()
-        res_oc = df_ocorrencias[df_ocorrencias[col_n_oc].astype(str).str.lower().str.contains(termo, na=False)] if col_n_oc else pd.DataFrame()
-        res_of = df_ocorrencias_fora[df_ocorrencias_fora[col_n_of].astype(str).str.lower().str.contains(termo, na=False)] if col_n_of else pd.DataFrame()
-        res_pr = df_prioridades[df_prioridades[col_n_pr].astype(str).str.lower().str.contains(termo, na=False)] if col_n_pr else pd.DataFrame()
+        # 2. Lógica de Busca Inteligente (Tolerar s/z, ll/lh, e ignorar acentos)
+        import unicodedata
+        import re
+        
+        def normalizar_para_busca(texto):
+            if pd.isna(texto): return ""
+            t = unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('utf-8').lower()
+            # Unificar s/z e l/ll/lh para não perder matches de nomes
+            t = t.replace('z', 's').replace('lh', 'l').replace('ll', 'l')
+            return t
+
+        termo_norm = normalizar_para_busca(termo)
+        termos_busca = [p.strip() for p in termo_norm.split() if p.strip()]
+
+        def match_inteligente(row, col):
+            if not col or col not in row: return False
+            val = normalizar_para_busca(row[col])
+            # Todos os pedaços do nome buscado devem estar no nome da planilha
+            return all(t in val for t in termos_busca)
+
+        # Filtrar Dados
+        res_aj = df_ajustes[df_ajustes.apply(lambda r: match_inteligente(r, col_n_aj), axis=1)] if col_n_aj and not df_ajustes.empty else pd.DataFrame()
+        res_oc = df_ocorrencias[df_ocorrencias.apply(lambda r: match_inteligente(r, col_n_oc), axis=1)] if col_n_oc and not df_ocorrencias.empty else pd.DataFrame()
+        res_of = df_ocorrencias_fora[df_ocorrencias_fora.apply(lambda r: match_inteligente(r, col_n_of), axis=1)] if col_n_of and not df_ocorrencias_fora.empty else pd.DataFrame()
+        res_pr = df_prioridades[df_prioridades.apply(lambda r: match_inteligente(r, col_n_pr), axis=1)] if col_n_pr and not df_prioridades.empty else pd.DataFrame()
 
         if res_aj.empty and res_oc.empty and res_of.empty and res_pr.empty:
             st.error(f"Nenhum registro encontrado para '{nome_busca}'.")
