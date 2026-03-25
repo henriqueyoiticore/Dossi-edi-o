@@ -97,19 +97,25 @@ st.markdown("""
             padding: 20px !important;
         }
 
-        /* Inputs e Selectbox para texto escuro (fundo claro) */
+        /* =========================================================
+           CORREÇÃO DE CORES DEFINITIVA (MANTÉM TEXTO CLARO NO CLOUD)
+           ========================================================= */
+        /* Inputs e Selectbox para texto claro (já que o fundo no cloud fica escuro) */
         [data-baseweb="select"] div,
-        [data-baseweb="input"] input {
-            color: #1E293B !important;
+        [data-baseweb="input"] input,
+        [data-baseweb="input"] textarea {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
             font-weight: 500 !important;
         }
         
         ::placeholder {
-            color: #64748B !important;
+            color: #CBD5E1 !important;
             opacity: 1 !important;
         }
 
-        /* Botões secundários: Fundo escuro e Texto claro para garantir contraste */
+        /* Botões secundários e principais: Forçar fundo escuro e TEXTO CLARO */
+        [data-testid="stButton"] button,
         [data-testid="baseButton-secondary"],
         [data-testid="stPopover"] button {
             background-color: #1E293B !important;
@@ -118,16 +124,19 @@ st.markdown("""
             font-weight: 600 !important;
         }
         
+        [data-testid="stButton"] button:hover,
         [data-testid="baseButton-secondary"]:hover,
         [data-testid="stPopover"] button:hover {
             border-color: #334155 !important;
             background-color: #334155 !important;
         }
         
-        /* Força a cor do texto clara dentro do botao secundário */
+        /* Força absolute a cor CLARA dentro de todos spans e div interno do botao */
+        [data-testid="stButton"] button *,
         [data-testid="baseButton-secondary"] *,
         [data-testid="stPopover"] button * {
             color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
 
         #MainMenu, footer {visibility: hidden;}
