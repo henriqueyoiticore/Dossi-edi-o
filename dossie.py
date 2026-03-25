@@ -97,27 +97,37 @@ st.markdown("""
             padding: 20px !important;
         }
 
-        /* Corrigir inputs (Selectbox) para texto claro (fundo escuro) */
-        [data-baseweb="select"] div {
-            color: #FFFFFF !important;
-        }
-
-        /* Forçar contraste nos botões que recebem bug de dark mode no cloud */
-        [data-testid="stButton"] button,
-        [data-testid="stPopover"] button,
-        [data-testid="baseButton-secondary"] {
-            background-color: #1E293B !important;
-            border-color: #1E293B !important;
+        /* Inputs e Selectbox para texto escuro (fundo claro) */
+        [data-baseweb="select"] div,
+        [data-baseweb="input"] input {
+            color: #1E293B !important;
+            font-weight: 500 !important;
         }
         
-        /* Força a cor do texto de absolutamente TUDO dentro do botao */
-        [data-testid="stButton"] button,
-        [data-testid="stButton"] button *,
-        [data-testid="stPopover"] button,
-        [data-testid="stPopover"] button *,
+        ::placeholder {
+            color: #64748B !important;
+            opacity: 1 !important;
+        }
+
+        /* Botões secundários com contraste dark (fundo claro, texto escuro) */
         [data-testid="baseButton-secondary"],
-        [data-testid="baseButton-secondary"] * {
-            color: #FFFFFF !important;
+        [data-testid="stPopover"] button {
+            background-color: #FFFFFF !important;
+            border-color: #CBD5E1 !important;
+            color: #1E293B !important;
+            font-weight: 600 !important;
+        }
+        
+        [data-testid="baseButton-secondary"]:hover,
+        [data-testid="stPopover"] button:hover {
+            border-color: #94A3B8 !important;
+            background-color: #F8FAFC !important;
+        }
+        
+        /* Força a cor do texto dentro do botao secundário */
+        [data-testid="baseButton-secondary"] *,
+        [data-testid="stPopover"] button * {
+            color: #1E293B !important;
         }
 
         #MainMenu, footer {visibility: hidden;}
@@ -512,6 +522,7 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
     col_motivo_fora = next((c for c in df_ocorrencias_fora.columns if 'motivo' in c.lower()), None)
     col_res_fora = next((c for c in df_ocorrencias_fora.columns if 'resolução' in c.lower() or 'resolucao' in c.lower()), None)
     col_desc_fora = next((c for c in df_ocorrencias_fora.columns if 'descrição' in c.lower() or 'incidente' in c.lower() or 'ocorrência' in c.lower() or 'ocorrencia' in c.lower()), None)
+    col_data_res_fora = next((c for c in df_ocorrencias_fora.columns if 'data' in c.lower() and ('resolução' in c.lower() or 'resolucao' in c.lower())), None)
 
     bloqueados_info = {}
     resolvidos_info = {}
@@ -536,8 +547,10 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
                 motivo = row_r.get(col_motivo_fora, "Sem motivo listado") if col_motivo_fora else "N/A"
                 desc = row_r.get(col_desc_fora, "Sem ocorrência listada") if col_desc_fora else "N/A"
                 resolucao = row_r.get(col_res_fora, "Sem resolução informada") if col_res_fora else "N/A"
+                raw_data_res = str(row_r.get(col_data_res_fora, "N/A")).strip() if col_data_res_fora and pd.notna(row_r.get(col_data_res_fora)) else "N/A"
+                data_res = raw_data_res.split()[0] if raw_data_res and raw_data_res.lower() not in ['nan', 'none', 'nat', 'n/a'] else "Sem data"
                 idx_real = row_r.get('_SheetRowIdx')
-                resolvidos_info[nome] = {'motivo': motivo, 'desc': desc, 'resolucao': resolucao, 'idx': idx_real}
+                resolvidos_info[nome] = {'motivo': motivo, 'desc': desc, 'resolucao': resolucao, 'data_res': data_res, 'idx': idx_real}
 
     hoje = pd.Timestamp.now().normalize()
     
@@ -615,15 +628,27 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
                                     # Obter index numérico das colunas na df_ocorrencias_fora (0-indexed para a função update)
                                     # Ignoramos _SheetRowIdx ao buscar a posição usando columns.get_loc
                                     try:
-                                        idx_col_bloq = df_ocorrencias_fora.columns.tolist().index(col_bloq_fora)
-                                        idx_col_res = df_ocorrencias_fora.columns.tolist().index(col_res_fora)
                                         service = get_google_sheets_service()
                                         
-                                        # ID da Planilha de Ocorrências (de onde vem o bloqueio)
-                                        ID_OCORRENCIAS_FORA = '16noLo9yfByjZLh4ZPbROz8p-RWdFZpxtiU2Uhz6ffhw'
+                                        # API direta para garantir a integridade dos índices como feito nos churns
+                                        resp = service.spreadsheets().values().get(spreadsheetId=ID_OCORRENCIAS_FORA, range="A1:Z1").execute()
+                                        headers_reais = resp.get('values', [[]])[0]
+                                        
+                                        idx_col_bloq = next((idx for idx, c in enumerate(headers_reais) if 'bloqueio' in str(c).lower()), df_ocorrencias_fora.columns.tolist().index(col_bloq_fora))
+                                        idx_col_res = next((idx for idx, c in enumerate(headers_reais) if 'resoluç' in str(c).lower() or 'resoluc' in str(c).lower()), df_ocorrencias_fora.columns.tolist().index(col_res_fora))
+                                        
+                                        # Data resolução real sheet index
+                                        col_dt_res_name = col_data_res_fora if col_data_res_fora else "Data resolução"
+                                        idx_col_data_res = next((idx for idx, c in enumerate(headers_reais) if 'data' in str(c).lower() and ('resolução' in str(c).lower() or 'resolucao' in str(c).lower())), None)
                                         
                                         ok1, err1 = update_sheet_cell(service, ID_OCORRENCIAS_FORA, idx_planilha, idx_col_res, res_texto)
                                         ok2, err2 = update_sheet_cell(service, ID_OCORRENCIAS_FORA, idx_planilha, idx_col_bloq, "RESOLVIDO")
+                                        
+                                        ok3 = True
+                                        if idx_col_data_res is not None:
+                                            from datetime import datetime
+                                            hoje_str = datetime.now().strftime('%d/%m/%Y')
+                                            ok3, _ = update_sheet_cell(service, ID_OCORRENCIAS_FORA, idx_planilha, idx_col_data_res, hoje_str)
                                         
                                         if ok1 and ok2:
                                             st.success("Bloqueio finalizado!")
@@ -660,19 +685,22 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
             motivo = 'Não informado'
             desc = 'Não informada'
             resolucao = 'Não informada'
+            data_resolucao = 'Sem data'
             for k, meta in resolvidos_info.items():
                 if nome_key_base in k or k in nome_key_base or nome_key_base.replace('ll', 'lh') in k or nome_key_base.replace('lh', 'll') in k:
                     motivo = meta.get('motivo', 'Não informado')
                     desc = meta.get('desc', 'Não informada')
                     resolucao = meta.get('resolucao', 'Não informada')
+                    data_resolucao = meta.get('data_res', 'Sem data')
                     break
             
             with st.container(border=True):
-                c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
+                c1, c2, c3, c4, c5 = st.columns([1, 1.5, 1.5, 1, 0.8])
                 c1.write(f"**Cliente:** {nome}")
                 c2.write(f"**Ocorrência:** {desc}")
                 c3.write(f"**Motivo Anterior:** {motivo}")
-                c4.write(f"**Resolução:** {resolucao}")
+                c4.write(f"**Resolução do CS:** {resolucao}")
+                c5.write(f"**Data da Resolução:** {data_resolucao}")
 
 def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridades):
     render_header("Dossiê do Cliente", "Histórico Consolidado | Visão 360º")
@@ -684,8 +712,24 @@ def render_dossie(df_ocorrencias, df_ocorrencias_fora, df_ajustes, df_prioridade
         if 'search_dossie_val' not in st.session_state:
             st.session_state['search_dossie_val'] = ""
             
-        nome_busca = st.text_input("👤 Nome do Cliente", value=st.session_state['search_dossie_val'], placeholder="Digite o nome para gerar o dossiê...", help="Busca em todas as bases de dados")
+        nome_busca = st.text_input("👤 Nome do Cliente", value=st.session_state['search_dossie_val'], placeholder="Digite o nome do cliente aqui para buscar no histórico...", help="Busca em todas as bases de dados")
         btn_gerar = st.button("Gerar Dossiê Completo", use_container_width=True, type="primary")
+
+        # Sugestões Inteligentes (Pegar últimos clientes da planilha de ocorrências ou tickets)
+        if not df_ocorrencias.empty:
+            col_n_oc = next((c for c in df_ocorrencias.columns if 'mentorado' in c.lower() or 'cliente' in c.lower()), None)
+            if col_n_oc:
+                recentes = df_ocorrencias[col_n_oc].dropna().unique()
+                sugestoes_todas = [str(x).strip() for x in recentes if str(x).strip() and str(x).strip().lower() not in ['nan', 'none']]
+                sugestoes = list(sugestoes_todas)[:3]
+                if sugestoes:
+                    st.markdown("<p style='text-align: center; color: #64748B; font-size: 0.85rem; margin-top: 10px; margin-bottom: 5px;'>Sugestões Rápidas:</p>", unsafe_allow_html=True)
+                    cols_sug = st.columns(len(sugestoes))
+                    for i, sug in enumerate(sugestoes):
+                        with cols_sug[i]:
+                            if st.button(f"{sug}", key=f"btn_sug_{i}", use_container_width=True):
+                                st.session_state['search_dossie_val'] = sug
+                                st.rerun()
 
     if nome_busca or btn_gerar:
         # Normalizar nomes para busca
