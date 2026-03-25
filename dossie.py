@@ -535,6 +535,7 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
 
     bloqueados_info = {}
     resolvidos_info = {}
+    df_bloq = pd.DataFrame()
     if not df_ocorrencias_fora.empty and col_mm_fora and col_bloq_fora:
         # Filtra quem está com BLOQUEIO explicitamente
         mask_b = df_ocorrencias_fora[col_bloq_fora].astype(str).str.strip().str.upper() == 'BLOQUEIO'
@@ -601,24 +602,17 @@ def render_central_avisos(df_avisos, df_ocorrencias_fora):
     c_v = [c for c in df_avisos.columns if c not in colunas_internas]
     
     # ================= UI DE BLOQUEADOS ===================
-    if not v_bloqueados.empty:
+    if not df_bloq.empty:
         st.markdown('<div style="color:#B45309; font-weight:700; margin-bottom: 10px; font-size: 1.2rem;">🛑 Bloqueados por Fatores Externos</div>', unsafe_allow_html=True)
         
-        # Como o usuário precisa interagir com os bloqueados, vamos exibir em um formato de lista expansível ou cards
-        for i, (_, block_row) in enumerate(v_bloqueados.iterrows()):
-            nome = str(block_row.get(col_mm_avisos, '')).strip()
-            nome_key_base = nome.lower()
+        # Como o usuário precisa interagir com os bloqueados, vamos exibir TODOS abertamente, sem depender da restrição de prazo da planilha de avisos
+        for i, (_, block_row) in enumerate(df_bloq.iterrows()):
+            nome = str(block_row.get(col_mm_fora, '')).strip().title()
             
-            # Recuperar os metadados tolerando as mesmas diferenças
-            motivo = 'Não informado'
-            desc = 'Não informada'
-            idx_planilha = None
-            for k, meta in bloqueados_info.items():
-                if nome_key_base in k or k in nome_key_base or nome_key_base.replace('ll', 'lh') in k or nome_key_base.replace('lh', 'll') in k:
-                    motivo = meta.get('motivo', 'Não informado')
-                    desc = meta.get('desc', 'Não informada')
-                    idx_planilha = meta.get('idx')
-                    break
+            # Recuperar os metadados diretamente da linha
+            motivo = block_row.get(col_motivo_fora, "Sem motivo listado") if col_motivo_fora else "N/A"
+            desc = block_row.get(col_desc_fora, "Sem ocorrência listada") if col_desc_fora else "N/A"
+            idx_planilha = block_row.get('_SheetRowIdx')
 
             with st.container(border=True):
                 c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
